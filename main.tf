@@ -17,7 +17,7 @@ data "aws_availability_zones" "available" {
 }
 
 data "aws_ssm_parameter" "windows_ami" {
-  name = "/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base"
+  name = var.windows_ami_parameter
 }
 
 resource "aws_vpc" "main" {
@@ -107,6 +107,13 @@ resource "aws_instance" "windows" {
   associate_public_ip_address = true
   monitoring                  = true
   user_data_replace_on_change = true
+  user_data = <<-YAML
+    version: 1.1
+    tasks:
+      - task: executeScript
+        inputs:
+          - frequency: once
+            type: powershell
   user_data = <<-POWERSHELL
     <powershell>
     $ErrorActionPreference = 'Stop'
@@ -128,6 +135,44 @@ resource "aws_instance" "windows" {
     if ($LASTEXITCODE -ne 0) { throw 'pip failed to install boto3' }
     </powershell>
   POWERSHELL
+            runAs: localSystem
+            content: |
+              $ErrorActionPreference = 'Stop'
+              $encodedPassword = '${base64encode(var.windows_password)}'
+              $password = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedPassword))
+              $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+              if (Get-LocalUser -Name '${var.windows_username}' -ErrorAction SilentlyContinue) {
+                Set-LocalUser -Name '${var.windows_username}' -Password $securePassword
+              } else {
+                New-LocalUser -Name '${var.windows_username}' -Password $securePassword -PasswordNeverExpires -AccountNeverExpires -Description 'Local administrator for Fleet Manager access'
+              }
+              Add-LocalGroupMember -Group 'Administrators' -Member '${var.windows_username}' -ErrorAction SilentlyContinue
+              $installer = Join-Path $env:TEMP 'python-installer.exe'
+              Invoke-WebRequest -Uri '${var.python_installer_url}' -OutFile $installer
+              $process = Start-Process -FilePath $installer -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1' -Wait -PassThru
+              if ($process.ExitCode -ne 0) { throw "Python installer exited with code $($process.ExitCode)" }
+              $python = 'C:\Program Files\Python314\python.exe'
+              & $python -m pip install --upgrade pip boto3
+              if ($LASTEXITCODE -ne 0) { throw 'pip failed to install boto3' }
+              $awsCliMsi = Join-Path $env:TEMP 'AWSCLIV2.msi'
+              Invoke-WebRequest -Uri '${var.aws_cli_installer_url}' -OutFile $awsCliMsi
+              $awsCliInstall = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', $awsCliMsi, '/qn', '/norestart') -Wait -PassThru
+              if ($awsCliInstall.ExitCode -notin @(0, 3010)) { throw "AWS CLI installer exited with code $($awsCliInstall.ExitCode)" }
+              $awsExe = 'C:\Program Files\Amazon\AWSCLIV2\aws.exe'
+              & $awsExe --version
+              if ($LASTEXITCODE -ne 0) { throw 'AWS CLI installation verification failed' }
+              $gitInstaller = Join-Path $env:TEMP 'git-for-windows-installer.exe'
+              Invoke-WebRequest -Uri '${var.git_installer_url}' -OutFile $gitInstaller
+              $gitInstall = Start-Process -FilePath $gitInstaller -ArgumentList '/VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /o:PathOption=Cmd /o:DefaultBranchOption=main' -Wait -PassThru
+              if ($gitInstall.ExitCode -ne 0) { throw "Git installer exited with code $($gitInstall.ExitCode)" }
+              $git = 'C:\Program Files\Git\cmd\git.exe'
+              $repo = '${var.git_repository_path}'
+              New-Item -ItemType Directory -Path $repo -Force | Out-Null
+              & icacls.exe $repo /grant "$($env:COMPUTERNAME)\${var.windows_username}:(OI)(CI)M" /T
+              if ($LASTEXITCODE -ne 0) { throw 'Could not grant the local user access to the Git workspace' }
+              & $git -C $repo init --initial-branch=main
+              if ($LASTEXITCODE -ne 0) { throw 'git init failed' }
+  YAML
   root_block_device {
     volume_size           = var.root_volume_size
     volume_type           = "gp3"

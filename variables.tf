@@ -4,6 +4,12 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "windows_ami_parameter" {
+  description = "Systems Manager public parameter for the Windows Server AMI. The default is Windows Server 2025 English Full Base."
+  type        = string
+  default     = "/aws/service/ami-windows-latest/Windows_Server-2025-English-Full-Base"
+}
+
 variable "name" {
   description = "Prefix used for resource names."
   type        = string
@@ -31,7 +37,7 @@ variable "public_subnet_cidr" {
 variable "instance_type" {
   description = "EC2 instance type. Windows with Python packages benefits from 4 GiB RAM."
   type        = string
-  default     = "t3.micro"
+  default     = "t3.small"
 }
 
 variable "root_volume_size" {
@@ -60,6 +66,24 @@ variable "python_installer_url" {
   description = "Official 64-bit Python installer URL."
   type        = string
   default     = "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.exe"
+}
+
+variable "git_installer_url" {
+  description = "Official latest Git for Windows 64-bit installer URL."
+  type        = string
+  default     = "https://github.com/git-for-windows/git/releases/latest/download/Git-64-bit.exe"
+}
+
+variable "aws_cli_installer_url" {
+  description = "Official AWS CLI v2 Windows 64-bit MSI installer URL."
+  type        = string
+  default     = "https://awscli.amazonaws.com/AWSCLIV2.msi"
+}
+
+variable "git_repository_path" {
+  description = "Directory initialized as a Git repository during first boot."
+  type        = string
+  default     = "C:\\workspace"
 }
 
 variable "attach_fleet_manager_policy_to_instance_role" {
